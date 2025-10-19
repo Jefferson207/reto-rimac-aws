@@ -19,19 +19,22 @@ export const main = async (event: any) => {
         const result = await service.create(body);
         console.log("✅ Cita creada:", result);
         return { statusCode: 201, body: JSON.stringify(result) };
-      }
-
-      if (event.httpMethod === "GET") {
+      } else if (event.httpMethod === "GET") {
         const insuredId = event.pathParameters?.insuredId!;
         const result = await service.findByInsuredId(insuredId);
         console.log("📄 Resultado GET:", result);
         return { statusCode: 200, body: JSON.stringify(result) };
+      } else {
+        throw new Error("Método HTTP no soportado");
       }
     }
 
     // --- CASO EVENTO SQS ---
     if (event.Records) {
-      console.log("📥 Mensaje recibido desde event-status-queue:", event.Records.length);
+      console.log(
+        "📥 Mensaje recibido desde event-status-queue:",
+        event.Records.length
+      );
       for (const record of event.Records) {
         const body = JSON.parse(record.body);
         console.log("🔎 Procesando actualización:", body);
@@ -49,7 +52,9 @@ export const main = async (event: any) => {
           })
         );
 
-        console.log(`✅ Estado actualizado a "completed" para ${body.insuredId}`);
+        console.log(
+          `✅ Estado actualizado a "completed" para ${body.insuredId}`
+        );
       }
     }
 

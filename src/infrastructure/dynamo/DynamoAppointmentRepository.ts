@@ -1,21 +1,31 @@
 import { AppointmentRepository } from "../../domain/repositories/AppointmentRepository";
 import { Appointment } from "../../domain/models/Appointment";
-import { DynamoDBClient, PutItemCommand, QueryCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
+import {
+  DynamoDBClient,
+} from "@aws-sdk/client-dynamodb";
+import {
+  DynamoDBDocumentClient,
+  PutCommand,
+  QueryCommand,
+  UpdateCommand,
+} from "@aws-sdk/lib-dynamodb";
 
 export class DynamoAppointmentRepository implements AppointmentRepository {
   private tableName = process.env.APPOINTMENT_TABLE!;
-  private client = new DynamoDBClient({ region: process.env.AWS_REGION });
+  private client: DynamoDBDocumentClient;
+
+  constructor() {
+    const ddbClient = new DynamoDBClient({ region: process.env.AWS_REGION });
+    this.client = DynamoDBDocumentClient.from(ddbClient);
+  }
 
   async save(appointment: Appointment): Promise<void> {
-    const item = {
-      insuredId: { S: appointment.insuredId },
-      scheduleId: { N: appointment.scheduleId.toString() },
-      countryISO: { S: appointment.countryISO },
-      status: { S: appointment.status },
-      requestId: { S: appointment.requestId },
-      createdAt: { S: appointment.createdAt },
-    };
-    await this.client.send(new PutItemCommand({ TableName: this.tableName, Item: item }));
+    await this.client.send(
+      new PutCommand({
+        TableName: this.tableName,
+        Item: appointment,
+      })
+    );
   }
 
   async findByInsuredId(insuredId: string): Promise<Appointment[]> {
@@ -23,30 +33,27 @@ export class DynamoAppointmentRepository implements AppointmentRepository {
       new QueryCommand({
         TableName: this.tableName,
         KeyConditionExpression: "insuredId = :id",
-        ExpressionAttributeValues: { ":id": { S: insuredId } },
+        ExpressionAttributeValues: { ":id": insuredId },
       })
     );
-    return (result.Items || []).map((item) => ({
-      insuredId: item.insuredId.S!,
-      scheduleId: Number(item.scheduleId.N),
-      countryISO: item.countryISO.S!,
-      status: item.status.S!,
-      requestId: item.requestId.S!,
-      createdAt: item.createdAt.S!,
-    }));
+    return result.Items as Appointment[] || [];
   }
 
-  async updateStatus(insuredId: string, scheduleId: number, status: string): Promise<void> {
+  async updateStatus(
+    insuredId: string,
+    scheduleId: number,
+    status: string
+  ): Promise<void> {
     await this.client.send(
-      new UpdateItemCommand({
+      new UpdateCommand({
         TableName: this.tableName,
         Key: {
-          insuredId: { S: insuredId },
-          scheduleId: { N: scheduleId.toString() },
+          insuredId,
+          scheduleId,
         },
         UpdateExpression: "SET #s = :s",
         ExpressionAttributeNames: { "#s": "status" },
-        ExpressionAttributeValues: { ":s": { S: status } },
+        ExpressionAttributeValues: { ":s": status },
       })
     );
   }
