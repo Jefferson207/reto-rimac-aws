@@ -1,0 +1,180 @@
+service: rimac-appointment
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  region: us-east-1
+  stage: DESA
+  environment:
+    APPOINTMENT_TABLE: ${self:service}-${self:provider.stage}-appointments
+    SNS_TOPIC_ARN: arn:aws:sns:${self:provider.region}:${aws:accountId}:appointment-topic
+    STATUS_QUEUE_URL: https://sqs.${self:provider.region}.amazonaws.com/${aws:accountId}/event-status-queue
+
+  iam:
+    role:
+      statements:
+        # DynamoDB permissions
+        - Effect: Allow
+          Action:
+            - dynamodb:PutItem
+            - dynamodb:Query
+            - dynamodb:UpdateItem
+          Resource:
+            - arn:aws:dynamodb:${self:provider.region}:${aws:accountId}:table/${self:provider.environment.APPOINTMENT_TABLE}
+
+        # SNS publish
+        - Effect: Allow
+          Action:
+            - sns:Publish
+          Resource:
+            - arn:aws:sns:${self:provider.region}:${aws:accountId}:appointment-topic
+
+        # SQS send/receive
+        - Effect: Allow
+          Action:
+            - sqs:SendMessage
+            - sqs:ReceiveMessage
+            - sqs:DeleteMessage
+          Resource:
+            - arn:aws:sqs:${self:provider.region}:${aws:accountId}:*
+
+functions:
+  appointment:
+    handler: dist/functions/appointment.main
+    events:
+      - http:
+          path: appointment
+          method: post
+      - http:
+          path: appointment/{insuredId}
+          method: get
+      - sqs:
+            arn: arn:aws:sqs:${self:provider.region}:351271460647:event-status-queue
+
+  appointmentPE:
+    handler: dist/functions/appointmentPE.main
+    events:
+      - sqs:
+          arn: arn:aws:sqs:${self:provider.region}:${aws:accountId}:appointment-pe-queue
+
+  appointmentCL:
+    handler: dist/functions/appointmentCL.main
+    events:
+      - sqs:
+          arn: arn:aws:sqs:${self:provider.region}:${aws:accountId}:appointment-cl-queue
+
+  docsUI:
+    handler: dist/functions/docsUI.main
+    events:
+      - http:
+          path: swagger
+          method: get
+
+plugins:
+  - serverless-offline
+
+custom:
+  serverless-offline:
+    httpPort: 3000
+    stageVariables:
+      REGION: ${self:provider.region}
+
+resources:
+  Resources:
+    # ---------- DYNAMODB ----------
+    AppointmentTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.APPOINTMENT_TABLE}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: insuredId
+            AttributeType: S
+          - AttributeName: scheduleId
+            AttributeType: N
+        KeySchema:
+          - AttributeName: insuredId
+            KeyType: HASH
+          - AttributeName: scheduleId
+            KeyType: RANGE
+
+    # ---------- SNS TOPIC ----------
+    AppointmentTopic:
+      Type: AWS::SNS::Topic
+      Properties:
+        TopicName: appointment-topic
+
+    # ---------- SQS QUEUES ----------
+    AppointmentPEQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: appointment-pe-queue
+
+    AppointmentCLQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: appointment-cl-queue
+
+    EventStatusQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: event-status-queue
+
+    # ---------- SNS SUBSCRIPTIONS (con filtros) ----------
+    SNSSubscriptionPE:
+      Type: AWS::SNS::Subscription
+      Properties:
+        TopicArn: !Ref AppointmentTopic
+        Protocol: sqs
+        Endpoint: !GetAtt AppointmentPEQueue.Arn
+        FilterPolicyScope: MessageBody
+        FilterPolicy:
+          countryISO:
+            - PE
+
+    SNSSubscriptionCL:
+      Type: AWS::SNS::Subscription
+      Properties:
+        TopicArn: !Ref AppointmentTopic
+        Protocol: sqs
+        Endpoint: !GetAtt AppointmentCLQueue.Arn
+        FilterPolicyScope: MessageBody
+        FilterPolicy:
+          countryISO:
+            - CL
+
+    # ---------- SQS POLICIES (permitir recibir desde SNS) ----------
+    SQSPolicyPE:
+      Type: AWS::SQS::QueuePolicy
+      Properties:
+        Queues:
+          - !Ref AppointmentPEQueue
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: sns.amazonaws.com
+              Action: SQS:SendMessage
+              Resource: !GetAtt AppointmentPEQueue.Arn
+              Condition:
+                ArnEquals:
+                  aws:SourceArn: !Ref AppointmentTopic
+
+    SQSPolicyCL:
+      Type: AWS::SQS::QueuePolicy
+      Properties:
+        Queues:
+          - !Ref AppointmentCLQueue
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: sns.amazonaws.com
+              Action: SQS:SendMessage
+              Resource: !GetAtt AppointmentCLQueue.Arn
+              Condition:
+                ArnEquals:
+                  aws:SourceArn: !Ref AppointmentTopic
